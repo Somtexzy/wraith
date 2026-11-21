@@ -39,6 +39,7 @@ import { getAllCachedTokens, getCachedTokenDecimals } from "./tokenCache";
 import { toDisplayAmount } from "./amount";
 import { getDependencyStatus, dependencyStatusBoundMs } from "./dependencies";
 import { HttpError, newCorrelationId } from "./utils/errors";
+import { bodyParseFailure, loggableError } from "./utils/bodyError";
 
 // ─── RPC Health Check Cache ───────────────────────────────────────────────
 // Keyed by network (#163): one cache entry would let a healthy testnet RPC
@@ -1168,8 +1169,20 @@ else {
     // handler used to answer `err.message` verbatim, which is how a Postgres
     // connection string reached callers through a raw driver error. The caller
     // gets a correlation id; the detail stays in the log.
+    // A body the parser could not read is the caller's mistake, not ours. Its
+    // error object carries the whole raw body, which can hold a national ID
+    // number or bank details, so only the failure type is logged.
+    const parseFailure = bodyParseFailure(err);
+    if (parseFailure) {
+      console.warn(`[api] Unreadable request body (${parseFailure.type})`);
+      return res
+        .status(parseFailure.status)
+        .json({ error: "The request body could not be read", code: "invalid_request" });
+    }
+
     const correlationId = newCorrelationId();
-    console.error(`[api] Unhandled error (${correlationId}):`, err);
+    // Never the raw error: libraries hang request data on their errors.
+    console.error(`[api] Unhandled error (${correlationId}):`, loggableError(err));
 
     return res.status(500).json({
       error: "Internal server error",
